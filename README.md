@@ -2,7 +2,7 @@
 
 # 📸 Minute Monitor
 
-A lightweight Dockerized webcam capture service that takes a picture every N seconds, saves it locally **or** uploads it to an API endpoint. Includes automatic storage limits and optional pruning rules to prevent filling local storage.
+A lightweight Dockerized webcam capture service that takes a picture every N seconds, saves it locally **or** uploads it to an API endpoint. Includes automatic storage limits, optional pruning rules to prevent filling local storage, and BusyBox (http webserver) serving of latest.jpg
 
 ***
 
@@ -11,13 +11,14 @@ A lightweight Dockerized webcam capture service that takes a picture every N sec
 *   Capture webcam images at a configurable interval
 *   Save images to disk **or** upload them to an API
 *   Unix timestamp filenames
-*   **Optional rolling snapshot:** also save/overwrite `latest.jpg` each capture (`WRITE_LATEST=true`)
+*   **Always writes** a rolling snapshot `latest.jpg` on each capture
 *   Enforce maximum data directory size (e.g., `5G`, `500M`, etc.)
 *   Optional pruning:
     *   **keep\_last** → preserve only newest N images
     *   **max\_age** → delete images older than D days
 *   Fully configurable with environment variables
 *   Supports V4L2 webcams (`/dev/video0`)
+*   Optional built‑in web server (BusyBox `httpd`) to serve **only** `/latest.jpg`
 
 ***
 
@@ -46,12 +47,11 @@ docker run --rm \
   --device=/dev/video0:/dev/video0 \
   -e INTERVAL_SECONDS=60 \
   -e PUSH_TO_API=false \
-  -e WRITE_LATEST=true \
   -v "$(pwd)/data:/data" \
   adclab/minute-monitor:latest
 ```
 
-> Set `WRITE_LATEST=true` to keep an always-up-to-date `latest.jpg` in `/data`.
+> The file `/data/latest.jpg` is always updated with the newest capture.
 
 ***
 
@@ -66,6 +66,28 @@ docker run --rm \
   -e API_TOKEN="optional-token" \
   adclab/minute-monitor:latest
 ```
+
+***
+
+### 🌐 (Optional) Serve only `/latest.jpg` from the same container
+
+Enable a tiny built‑in BusyBox `httpd` to expose just `latest.jpg`:
+
+```bash
+docker run --rm \
+  --device=/dev/video0:/dev/video0 \
+  -p 8080:8080 \
+  -e INTERVAL_SECONDS=60 \
+  -e PUSH_TO_API=false \
+  -e SERVE_LATEST=true \
+  -e SERVER_PORT=8080 \
+  -v "$(pwd)/data:/data" \
+  adclab/minute-monitor:latest
+```
+
+Open: <http://localhost:8080/latest.jpg>
+
+> Only `/latest.jpg` is exposed. Use a cache‑buster query string (e.g., `latest.jpg?ts=$(date +%s)`) to avoid browser caching.
 
 ***
 
@@ -91,14 +113,21 @@ services:
     volumes:
       - ./data:/data
 
+    # (Optional) expose built-in server to serve only /latest.jpg
+    ports:
+      - "8080:8080"
+
     environment:
       # --- Core settings ---
       INTERVAL_SECONDS: 60
       PUSH_TO_API: "false"
-      WRITE_LATEST: "true"
       CAMERA_DEVICE: "/dev/video0"
       RESOLUTION: "1280x720"
       JPEG_QUALITY: 90
+
+      # --- Built-in server (BusyBox httpd) ---
+      SERVE_LATEST: "true"      # enable to serve /latest.jpg
+      SERVER_PORT: "8080"
 
       # --- Storage limit ---
       MAX_DATA_SIZE: "5G"
@@ -120,21 +149,35 @@ services:
       #API_TOKEN: "my_secret_token"
 ```
 
+> With `SERVE_LATEST=true`, browse **<http://localhost:8080/latest.jpg>**.  
+> `latest.jpg` is always updated on every capture.
+
 ***
 
 ## ⚙️ Configuration
 
 ### Core Environment Variables
 
-| Variable           | Default       | Description                                                              |
-| ------------------ | ------------- | ------------------------------------------------------------------------ |
-| `INTERVAL_SECONDS` | `60`          | Time between captures                                                    |
-| `PUSH_TO_API`      | `false`       | If `true`, upload instead of saving                                      |
-| `WRITE_LATEST`     | `false`       | If `true`, also write/overwrite `${DATA_DIR}/latest.jpg` on each capture |
-| `DATA_DIR`         | `/data`       | Directory where images are stored                                        |
-| `CAMERA_DEVICE`    | `/dev/video0` | Webcam device                                                            |
-| `RESOLUTION`       | `1280x720`    | Image resolution                                                         |
-| `JPEG_QUALITY`     | `90`          | JPEG quality                                                             |
+| Variable           | Default       | Description                         |
+| ------------------ | ------------- | ----------------------------------- |
+| `INTERVAL_SECONDS` | `60`          | Time between captures               |
+| `PUSH_TO_API`      | `false`       | If `true`, upload instead of saving |
+| `DATA_DIR`         | `/data`       | Directory where images are stored   |
+| `CAMERA_DEVICE`    | `/dev/video0` | Webcam device                       |
+| `RESOLUTION`       | `1280x720`    | Image resolution                    |
+| `JPEG_QUALITY`     | `90`          | JPEG quality                        |
+
+***
+
+## Built‑in Server (Optional)
+
+| Variable       | Default | Description                                             |
+| -------------- | ------- | ------------------------------------------------------- |
+| `SERVE_LATEST` | `true`  | If `true`, start BusyBox `httpd` to serve `/latest.jpg` |
+| `SERVER_PORT`  | `8080`  | Port used by the built‑in server                        |
+
+> BusyBox `httpd` serves a minimal docroot that includes only a symlink to `/data/latest.jpg`. Other paths return 404.  
+> To avoid browser caching, fetch with `latest.jpg?ts=<epoch>`.
 
 ***
 
@@ -156,7 +199,8 @@ services:
 | `KEEP_LAST_N`   | `0`     | Keep only newest N images                                               |
 | `MAX_AGE_DAYS`  | `0`     | Delete images older than D days                                         |
 
-> **Note:** When `WRITE_LATEST=true`, the size check accounts for the potential change in `latest.jpg`, so enabling the flag won’t unexpectedly push you over `MAX_DATA_SIZE`. Pruning rules target files named `capture_*.jpg`; `latest.jpg` is not deleted by pruning.
+> **Note:** The size check accounts for the overwrite of `latest.jpg` so the limit is enforced correctly.  
+> Pruning rules target files named `capture_*.jpg`; `latest.jpg` is not pruned.
 
 ***
 
@@ -189,7 +233,7 @@ services:
 Minute Monitor uses **V4L2** (Video4Linux2), which exposes webcams under:
 
     /dev/video0
-    /usr/dev/video1
+    /dev/video1
     /dev/video2
     ...
 
