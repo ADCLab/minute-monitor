@@ -2,8 +2,7 @@
 
 # 📸 Minute Monitor
 
-A lightweight Dockerized webcam capture service that takes a picture every N seconds, saves it locally **or** uploads it to an API endpoint.  
-Includes automatic storage limits and optional pruning rules to prevent filling local storage.
+A lightweight Dockerized webcam capture service that takes a picture every N seconds, saves it locally **or** uploads it to an API endpoint. Includes automatic storage limits and optional pruning rules to prevent filling local storage.
 
 ***
 
@@ -68,22 +67,26 @@ docker run --rm \
 
 # 📦 Docker‑Compose Example
 
-You can run the service via Docker Compose.  
 Create a file named **docker-compose.yml**:
 
 ```yaml
 version: "3.9"
+
 services:
   minute-monitor:
     image: adclab/minute-monitor:latest
+
     # Give the container access to your webcam
     devices:
       - "/dev/video0:/dev/video0"
+
     # Restart automatically unless manually stopped
     restart: unless-stopped
+
     # Persist images on host
     volumes:
       - ./data:/data
+
     environment:
       # --- Core settings ---
       INTERVAL_SECONDS: 60
@@ -91,22 +94,26 @@ services:
       CAMERA_DEVICE: "/dev/video0"
       RESOLUTION: "1280x720"
       JPEG_QUALITY: 90
+
       # --- Storage limit ---
       MAX_DATA_SIZE: "5G"
-      # --- Pruning options (choose ONE) ---
+
+      # --- Pruning options (choose ONE mode) ---
       #PRUNE_MODE: "none"
+
       # Keep last N images
       #PRUNE_MODE: "keep_last"
       #KEEP_LAST_N: 10000
-      # Delete files older than D days
+
+      # Delete images older than D days
       #PRUNE_MODE: "max_age"
       #MAX_AGE_DAYS: 7
+
       # --- API upload mode (optional) ---
       #PUSH_TO_API: "true"
       #API_URL: "https://example.com/upload"
       #API_TOKEN: "my_secret_token"
 ```
-
 
 ***
 
@@ -120,12 +127,12 @@ services:
 | `PUSH_TO_API`      | `false`       | If `true`, upload instead of saving |
 | `DATA_DIR`         | `/data`       | Directory where images are stored   |
 | `CAMERA_DEVICE`    | `/dev/video0` | Webcam device                       |
-| `RESOLUTION`       | `1280x720`    | Image dimensions                    |
+| `RESOLUTION`       | `1280x720`    | Image resolution                    |
 | `JPEG_QUALITY`     | `90`          | JPEG quality                        |
 
 ***
 
-### API Upload Variables
+## API Upload Variables
 
 | Variable    | Default | Description           |
 | ----------- | ------- | --------------------- |
@@ -134,7 +141,7 @@ services:
 
 ***
 
-### Storage Limit + Pruning
+## Storage Limit + Pruning
 
 | Variable        | Default | Description                                                             |
 | --------------- | ------- | ----------------------------------------------------------------------- |
@@ -169,10 +176,91 @@ services:
 
 ***
 
-## 🤝 Contributing & Forking
+## 🔍 Finding Your Webcam Device on Linux
 
-Issues and pull requests welcome, but unsure how much time I have to implement because of work.  Everyone is encouraged to fork.
+Minute Monitor uses **V4L2** (Video4Linux2), which exposes webcams under:
+
+    /dev/video0
+    /dev/video1
+    /dev/video2
+    ...
+
+Follow these steps to identify the correct device.
 
 ***
 
+### 1. List Available Video Devices
 
+```bash
+ls /dev/video*
+```
+
+Example:
+
+    /dev/video0
+
+***
+
+### 2. View Device Details with `v4l2-ctl` (Recommended)
+
+Install V4L2 utilities:
+
+```bash
+sudo apt install v4l-utils
+```
+
+Then list devices:
+
+```bash
+v4l2-ctl --list-devices
+```
+
+***
+
+### 3. Check Kernel Messages with `dmesg`
+
+```bash
+dmesg | grep -i video
+```
+
+Look for:
+
+    /dev/video0 created
+
+***
+
+### 4. Verify with `lsusb`
+
+```bash
+lsusb
+```
+
+Example:
+
+    Bus 003 Device 004: ID 046d:0825 Logitech, Inc. Webcam C270
+
+***
+
+### 5. Test Capturing a Frame (Optional)
+
+Using `fswebcam`:
+
+```bash
+sudo apt install fswebcam
+fswebcam test.jpg
+```
+
+Using `ffmpeg`:
+
+```bash
+ffmpeg -f v4l2 -i /dev/video0 -frames:v 1 test.jpg
+```
+
+***
+
+## 🤝 Contributing & Forking
+
+Issues and pull requests welcome, but unsure how much time I have to implement because of work.  
+Everyone is encouraged to fork and extend the project.
+
+***
