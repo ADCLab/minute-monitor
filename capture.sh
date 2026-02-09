@@ -11,14 +11,15 @@ CAMERA_DEVICE="${CAMERA_DEVICE:-/dev/video0}"
 RESOLUTION="${RESOLUTION:-1280x720}"
 JPEG_QUALITY="${JPEG_QUALITY:-90}"
 
-# Optional "latest.jpg" rolling snapshot
-WRITE_LATEST="${WRITE_LATEST:-false}"   # true|false (if true, overwrite ${DATA_DIR}/latest.jpg each capture)
+# Built-in server (BusyBox httpd)
+SERVE_LATEST="${SERVE_LATEST:-true}"     # if true, run busybox httpd serving only /latest.jpg
+SERVER_PORT="${SERVER_PORT:-8080}"
 
 # Max size + pruning
-MAX_DATA_SIZE="${MAX_DATA_SIZE:-0}"     # e.g., "5G", "500M", "1000000000", or "0" for unlimited
-PRUNE_MODE="${PRUNE_MODE:-none}"        # none | keep_last | max_age
-KEEP_LAST_N="${KEEP_LAST_N:-0}"         # used when PRUNE_MODE=keep_last
-MAX_AGE_DAYS="${MAX_AGE_DAYS:-0}"       # used when PRUNE_MODE=max_age
+MAX_DATA_SIZE="${MAX_DATA_SIZE:-0}"      # e.g., "5G", "500M", "1000000000", or "0" for unlimited
+PRUNE_MODE="${PRUNE_MODE:-none}"         # none | keep_last | max_age
+KEEP_LAST_N="${KEEP_LAST_N:-0}"          # used when PRUNE_MODE=keep_last
+MAX_AGE_DAYS="${MAX_AGE_DAYS:-0}"        # used when PRUNE_MODE=max_age
 
 # -------- Helpers --------
 log() { echo "[$(date -Iseconds)] $*"; }
@@ -69,7 +70,6 @@ parse_size_to_bytes() {
 
 # Current size of DATA_DIR in bytes (GNU du supports -sb)
 dir_size_bytes() {
-  # If directory is empty/nonexistent, treat as 0
   if [ ! -d "$DATA_DIR" ]; then
     echo 0
     return 0
@@ -90,8 +90,6 @@ prune_keep_last() {
     return 0
   fi
 
-  # List capture files newest-first; delete everything beyond N
-  # Uses find->sort for safer handling than plain ls
   mapfile -t files < <(find "$DATA_DIR" -maxdepth 1 -type f -name 'capture_*.jpg' -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk '{print $2}')
   local count="${#files[@]}"
 
@@ -115,31 +113,21 @@ prune_max_age() {
   fi
 
   log "PRUNE max_age: deleting capture_*.jpg older than $d days"
-  # -mtime +d means strictly greater than d*24 hours old
   find "$DATA_DIR" -maxdepth 1 -type f -name 'capture_*.jpg' -mtime +"$d" -print -delete 2>/dev/null || true
 }
 
 prune_if_configured() {
   case "${PRUNE_MODE,,}" in
-    none)
-      return 0
-      ;;
-    keep_last)
-      prune_keep_last "$KEEP_LAST_N"
-      ;;
-    max_age)
-      prune_max_age "$MAX_AGE_DAYS"
-      ;;
-    *)
-      log "WARN: Unknown PRUNE_MODE='$PRUNE_MODE' (expected none|keep_last|max_age). No pruning done."
-      return 0
-      ;;
+    none)      return 0 ;;
+    keep_last) prune_keep_last "$KEEP_LAST_N" ;;
+    max_age)   prune_max_age "$MAX_AGE_DAYS" ;;
+    *)         log "WARN: Unknown PRUNE_MODE='$PRUNE_MODE' (expected none|keep_last|max_age). No pruning done." ;;
   esac
 }
 
 # Enforce max size before moving TMPFILE into DATA_DIR
 # If limit is exceeded, attempt pruning; if still exceeded -> exit
-# Supports additional delta for 'latest.jpg' overwrite when enabled.
+# Accounts for 'latest.jpg' overwrite growth.
 enforce_max_size_or_exit() {
   local max_bytes="$1"
   local incoming_plus_extra="$2"
@@ -150,8 +138,6 @@ enforce_max_size_or_exit() {
 
   local current
   current="$(dir_size_bytes)"
-
-  # Predict size after adding incoming file (+ optional latest.jpg delta)
   local predicted=$((current + incoming_plus_extra))
 
   if [ "$predicted" -lt "$max_bytes" ]; then
@@ -198,8 +184,30 @@ if [ ! -e "$CAMERA_DEVICE" ]; then
   exit 1
 fi
 
+# -------- Start BusyBox httpd if enabled --------
+if is_true "$SERVE_LATEST"; then
+  SERVE_DIR="/serve"
+  mkdir -p "$SERVE_DIR"
+
+  # Minimal index to avoid directory listing usefulness
+  if [ ! -f "${SERVE_DIR}/index.html" ]; then
+    cat > "${SERVE_DIR}/index.html" <<'HTML'
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>Minute Monitor</title>
+<body><p>Fetch the current image at <code>/latest.jpg</code>.</p></body>
+</html>
+HTML
+  fi
+
+  # Symlink so only /latest.jpg is exposed from the docroot
+  ln -sf "${DATA_DIR%/}/latest.jpg" "${SERVE_DIR}/latest.jpg"
+
+  busybox httpd -p "${SERVER_PORT}" -h "${SERVE_DIR}"
+  log "BusyBox httpd started on port ${SERVER_PORT} (serving only /latest.jpg)"
+fi
+
 log "Starting capture loop"
-log "INTERVAL_SECONDS=$INTERVAL_SECONDS | PUSH_TO_API=$PUSH_TO_API | MAX_DATA_SIZE=$MAX_DATA_SIZE (${MAX_BYTES}B) | PRUNE_MODE=$PRUNE_MODE | WRITE_LATEST=$WRITE_LATEST"
+log "INTERVAL_SECONDS=$INTERVAL_SECONDS | PUSH_TO_API=$PUSH_TO_API | MAX_DATA_SIZE=$MAX_DATA_SIZE (${MAX_BYTES}B) | PRUNE_MODE=$PRUNE_MODE | SERVE_LATEST=$SERVE_LATEST PORT=$SERVER_PORT"
 
 while true; do
   EPOCH="$(date +%s)"
@@ -242,23 +250,15 @@ while true; do
     # Enforce max folder size before saving
     INCOMING_BYTES="$(file_size_bytes "$TMPFILE")"
 
-    # If we're going to overwrite latest.jpg, estimate the additional growth.
-    EXTRA_FOR_LATEST=0
-    if is_true "$WRITE_LATEST"; then
-      LATEST_PATH="${DATA_DIR%/}/latest.jpg"
-      if [ -f "$LATEST_PATH" ]; then
-        EXISTING_LATEST_BYTES="$(file_size_bytes "$LATEST_PATH")"
-      else
-        EXISTING_LATEST_BYTES=0
-      fi
-
-      # Overwriting latest.jpg will at most add the difference if the new image is larger.
-      EXTRA_FOR_LATEST=$((INCOMING_BYTES - EXISTING_LATEST_BYTES))
-      # Do not count decreases as negative growth for enforcement
-      if [ "$EXTRA_FOR_LATEST" -lt 0 ]; then
-        EXTRA_FOR_LATEST=0
-      fi
+    # Always maintain latest.jpg; estimate growth
+    LATEST_PATH="${DATA_DIR%/}/latest.jpg"
+    if [ -f "$LATEST_PATH" ]; then
+      EXISTING_LATEST_BYTES="$(file_size_bytes "$LATEST_PATH")"
+    else
+      EXISTING_LATEST_BYTES=0
     fi
+    EXTRA_FOR_LATEST=$((INCOMING_BYTES - EXISTING_LATEST_BYTES))
+    if [ "$EXTRA_FOR_LATEST" -lt 0 ]; then EXTRA_FOR_LATEST=0; fi
 
     enforce_max_size_or_exit "$MAX_BYTES" "$((INCOMING_BYTES + EXTRA_FOR_LATEST))"
 
@@ -266,11 +266,9 @@ while true; do
     mv "$TMPFILE" "$DEST"
     log "Saved to disk: $DEST"
 
-    # Optionally update a rolling "latest.jpg" snapshot
-    if is_true "$WRITE_LATEST"; then
-      cp -f "$DEST" "${DATA_DIR%/}/latest.jpg"
-      log "Updated latest image: ${DATA_DIR%/}/latest.jpg"
-    fi
+    # Always update rolling latest.jpg
+    cp -f "$DEST" "${DATA_DIR%/}/latest.jpg"
+    log "Updated latest image: ${DATA_DIR%/}/latest.jpg"
   fi
 
   sleep "$INTERVAL_SECONDS"

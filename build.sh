@@ -2,7 +2,7 @@
 
 # Set variables here
 REPO="adclab/minute-monitor"
-VERSION="v0.2"
+VERSION="v0.3"
 
 # Build image with both tags
 docker build \

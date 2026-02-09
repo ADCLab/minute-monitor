@@ -1,35 +1,35 @@
 FROM debian:bookworm-slim
 
-# Install fswebcam for capture, curl for API upload, ca-certs for HTTPS
+# Install capture + upload tools and BusyBox for httpd
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    fswebcam \
-    curl \
-    ca-certificates \
-    tzdata \
+    fswebcam curl ca-certificates busybox tzdata \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy entrypoint script
+# Copy entrypoint
 COPY capture.sh /app/capture.sh
 RUN chmod +x /app/capture.sh
 
-# Create data directory (you should mount a volume here)
+# Data folder for images
 RUN mkdir -p /data
 
-# Default environment variables
+# Default environment
 ENV INTERVAL_SECONDS=60 \
     PUSH_TO_API=false \
     DATA_DIR=/data \
     API_URL="" \
     API_TOKEN="" \
     CAMERA_DEVICE=/dev/video0 \
-    RESOLUTION=1280x720 \
+    RESOLUTION=1920x1080 \
     JPEG_QUALITY=90 \
-    WRITE_LATEST=true \
     MAX_DATA_SIZE=0 \
     PRUNE_MODE=none \
     KEEP_LAST_N=0 \
-    MAX_AGE_DAYS=0 
+    MAX_AGE_DAYS=0 \
+    SERVE_LATEST=true \
+    SERVER_PORT=8080
+
+EXPOSE 8080
 
 ENTRYPOINT ["/app/capture.sh"]
