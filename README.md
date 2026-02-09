@@ -11,6 +11,7 @@ A lightweight Dockerized webcam capture service that takes a picture every N sec
 *   Capture webcam images at a configurable interval
 *   Save images to disk **or** upload them to an API
 *   Unix timestamp filenames
+*   **Optional rolling snapshot:** also save/overwrite `latest.jpg` each capture (`WRITE_LATEST=true`)
 *   Enforce maximum data directory size (e.g., `5G`, `500M`, etc.)
 *   Optional pruning:
     *   **keep\_last** → preserve only newest N images
@@ -45,9 +46,12 @@ docker run --rm \
   --device=/dev/video0:/dev/video0 \
   -e INTERVAL_SECONDS=60 \
   -e PUSH_TO_API=false \
+  -e WRITE_LATEST=true \
   -v "$(pwd)/data:/data" \
   adclab/minute-monitor:latest
 ```
+
+> Set `WRITE_LATEST=true` to keep an always-up-to-date `latest.jpg` in `/data`.
 
 ***
 
@@ -91,6 +95,7 @@ services:
       # --- Core settings ---
       INTERVAL_SECONDS: 60
       PUSH_TO_API: "false"
+      WRITE_LATEST: "true"
       CAMERA_DEVICE: "/dev/video0"
       RESOLUTION: "1280x720"
       JPEG_QUALITY: 90
@@ -121,14 +126,15 @@ services:
 
 ### Core Environment Variables
 
-| Variable           | Default       | Description                         |
-| ------------------ | ------------- | ----------------------------------- |
-| `INTERVAL_SECONDS` | `60`          | Time between captures               |
-| `PUSH_TO_API`      | `false`       | If `true`, upload instead of saving |
-| `DATA_DIR`         | `/data`       | Directory where images are stored   |
-| `CAMERA_DEVICE`    | `/dev/video0` | Webcam device                       |
-| `RESOLUTION`       | `1280x720`    | Image resolution                    |
-| `JPEG_QUALITY`     | `90`          | JPEG quality                        |
+| Variable           | Default       | Description                                                              |
+| ------------------ | ------------- | ------------------------------------------------------------------------ |
+| `INTERVAL_SECONDS` | `60`          | Time between captures                                                    |
+| `PUSH_TO_API`      | `false`       | If `true`, upload instead of saving                                      |
+| `WRITE_LATEST`     | `false`       | If `true`, also write/overwrite `${DATA_DIR}/latest.jpg` on each capture |
+| `DATA_DIR`         | `/data`       | Directory where images are stored                                        |
+| `CAMERA_DEVICE`    | `/dev/video0` | Webcam device                                                            |
+| `RESOLUTION`       | `1280x720`    | Image resolution                                                         |
+| `JPEG_QUALITY`     | `90`          | JPEG quality                                                             |
 
 ***
 
@@ -149,6 +155,8 @@ services:
 | `PRUNE_MODE`    | `none`  | `none`, `keep_last`, or `max_age`                                       |
 | `KEEP_LAST_N`   | `0`     | Keep only newest N images                                               |
 | `MAX_AGE_DAYS`  | `0`     | Delete images older than D days                                         |
+
+> **Note:** When `WRITE_LATEST=true`, the size check accounts for the potential change in `latest.jpg`, so enabling the flag won’t unexpectedly push you over `MAX_DATA_SIZE`. Pruning rules target files named `capture_*.jpg`; `latest.jpg` is not deleted by pruning.
 
 ***
 
@@ -181,7 +189,7 @@ services:
 Minute Monitor uses **V4L2** (Video4Linux2), which exposes webcams under:
 
     /dev/video0
-    /dev/video1
+    /usr/dev/video1
     /dev/video2
     ...
 
