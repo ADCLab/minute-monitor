@@ -11,6 +11,9 @@ CAMERA_DEVICE="${CAMERA_DEVICE:-/dev/video0}"
 RESOLUTION="${RESOLUTION:-1280x720}"
 JPEG_QUALITY="${JPEG_QUALITY:-90}"
 
+# Optional "latest.jpg" rolling snapshot
+WRITE_LATEST="${WRITE_LATEST:-false}"   # true|false (if true, overwrite ${DATA_DIR}/latest.jpg each capture)
+
 # Max size + pruning
 MAX_DATA_SIZE="${MAX_DATA_SIZE:-0}"     # e.g., "5G", "500M", "1000000000", or "0" for unlimited
 PRUNE_MODE="${PRUNE_MODE:-none}"        # none | keep_last | max_age
@@ -136,9 +139,10 @@ prune_if_configured() {
 
 # Enforce max size before moving TMPFILE into DATA_DIR
 # If limit is exceeded, attempt pruning; if still exceeded -> exit
+# Supports additional delta for 'latest.jpg' overwrite when enabled.
 enforce_max_size_or_exit() {
   local max_bytes="$1"
-  local incoming_bytes="$2"
+  local incoming_plus_extra="$2"
 
   if [ "$max_bytes" -le 0 ]; then
     return 0
@@ -147,19 +151,19 @@ enforce_max_size_or_exit() {
   local current
   current="$(dir_size_bytes)"
 
-  # Predict size after adding incoming file
-  local predicted=$((current + incoming_bytes))
+  # Predict size after adding incoming file (+ optional latest.jpg delta)
+  local predicted=$((current + incoming_plus_extra))
 
   if [ "$predicted" -lt "$max_bytes" ]; then
     return 0
   fi
 
-  log "WARN: Data dir would exceed MAX_DATA_SIZE (current=${current}B + incoming=${incoming_bytes}B >= max=${max_bytes}B). Attempting prune mode: ${PRUNE_MODE}"
+  log "WARN: Data dir would exceed MAX_DATA_SIZE (current=${current}B + incoming+extra=${incoming_plus_extra}B >= max=${max_bytes}B). Attempting prune mode: ${PRUNE_MODE}"
 
   prune_if_configured
 
   current="$(dir_size_bytes)"
-  predicted=$((current + incoming_bytes))
+  predicted=$((current + incoming_plus_extra))
 
   if [ "$predicted" -ge "$max_bytes" ]; then
     log "ERROR: Max data size reached and pruning insufficient (predicted=${predicted}B >= max=${max_bytes}B). Stopping."
@@ -195,7 +199,7 @@ if [ ! -e "$CAMERA_DEVICE" ]; then
 fi
 
 log "Starting capture loop"
-log "INTERVAL_SECONDS=$INTERVAL_SECONDS | PUSH_TO_API=$PUSH_TO_API | MAX_DATA_SIZE=$MAX_DATA_SIZE (${MAX_BYTES}B) | PRUNE_MODE=$PRUNE_MODE"
+log "INTERVAL_SECONDS=$INTERVAL_SECONDS | PUSH_TO_API=$PUSH_TO_API | MAX_DATA_SIZE=$MAX_DATA_SIZE (${MAX_BYTES}B) | PRUNE_MODE=$PRUNE_MODE | WRITE_LATEST=$WRITE_LATEST"
 
 while true; do
   EPOCH="$(date +%s)"
@@ -237,11 +241,36 @@ while true; do
   else
     # Enforce max folder size before saving
     INCOMING_BYTES="$(file_size_bytes "$TMPFILE")"
-    enforce_max_size_or_exit "$MAX_BYTES" "$INCOMING_BYTES"
+
+    # If we're going to overwrite latest.jpg, estimate the additional growth.
+    EXTRA_FOR_LATEST=0
+    if is_true "$WRITE_LATEST"; then
+      LATEST_PATH="${DATA_DIR%/}/latest.jpg"
+      if [ -f "$LATEST_PATH" ]; then
+        EXISTING_LATEST_BYTES="$(file_size_bytes "$LATEST_PATH")"
+      else
+        EXISTING_LATEST_BYTES=0
+      fi
+
+      # Overwriting latest.jpg will at most add the difference if the new image is larger.
+      EXTRA_FOR_LATEST=$((INCOMING_BYTES - EXISTING_LATEST_BYTES))
+      # Do not count decreases as negative growth for enforcement
+      if [ "$EXTRA_FOR_LATEST" -lt 0 ]; then
+        EXTRA_FOR_LATEST=0
+      fi
+    fi
+
+    enforce_max_size_or_exit "$MAX_BYTES" "$((INCOMING_BYTES + EXTRA_FOR_LATEST))"
 
     DEST="${DATA_DIR%/}/${FILENAME}"
     mv "$TMPFILE" "$DEST"
     log "Saved to disk: $DEST"
+
+    # Optionally update a rolling "latest.jpg" snapshot
+    if is_true "$WRITE_LATEST"; then
+      cp -f "$DEST" "${DATA_DIR%/}/latest.jpg"
+      log "Updated latest image: ${DATA_DIR%/}/latest.jpg"
+    fi
   fi
 
   sleep "$INTERVAL_SECONDS"

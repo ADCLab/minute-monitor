@@ -25,6 +25,11 @@ ENV INTERVAL_SECONDS=60 \
     API_TOKEN="" \
     CAMERA_DEVICE=/dev/video0 \
     RESOLUTION=1280x720 \
-    JPEG_QUALITY=90
+    JPEG_QUALITY=90 \
+    WRITE_LATEST=true \
+    MAX_DATA_SIZE=0 \
+    PRUNE_MODE=none \
+    KEEP_LAST_N=0 \
+    MAX_AGE_DAYS=0 
 
 ENTRYPOINT ["/app/capture.sh"]
