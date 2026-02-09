@@ -2,8 +2,7 @@
 
 # 📸 Minute Monitor
 
-A lightweight Dockerized webcam capture service that takes a picture every N seconds, saves it locally **or** uploads it to an API endpoint.  
-Includes automatic storage limits and optional pruning rules to prevent filling local storage.
+A lightweight Dockerized webcam capture service that takes a picture every N seconds, saves it locally **or** uploads it to an API endpoint. Includes automatic storage limits and optional pruning rules to prevent filling local storage.
 
 ***
 
